@@ -38,29 +38,23 @@ pub struct ResourceRecordSet {
 
 pub struct DeSecClient {
     pub api_url: String,
-    pub token: Option<String>
-}
-
-impl Default for DeSecClient {
-    fn default() -> Self {
-        DeSecClient {
-            api_url: API_URL.to_string(),
-            token: None
-        }
-    }
+    pub token: String
 }
 
 impl DeSecClient {
 
     pub fn new(token: String) -> Self {
-        DeSecClient { token: Some(token), ..Default::default() }
+        DeSecClient {
+            api_url: API_URL.to_string(),
+            token
+        }
     }
 
-    pub fn get_account_info(self) -> Result<String, DeSecError> {
+    pub fn get_account_info(&self) -> Result<String, DeSecError> {
         self.get("/auth/account/".to_string())
     }
 
-    pub fn get_rrset(self, domain: String, subname: String, rrset_type: String) -> Result<ResourceRecordSet, DeSecError> {
+    pub fn get_rrset(&self, domain: String, subname: String, rrset_type: String) -> Result<ResourceRecordSet, DeSecError> {
         serde_json::from_str(
             self.get(format!(
                 "/domains/{}/rrsets/{}/{}/",
@@ -69,25 +63,17 @@ impl DeSecClient {
         ).map_err(DeSecError::Parser)
     }
 
-    pub fn get_rrsets(self, domain: String) -> Result<Vec<ResourceRecordSet>, DeSecError> {
+    pub fn get_rrsets(&self, domain: String) -> Result<Vec<ResourceRecordSet>, DeSecError> {
         serde_json::from_str(
             self.get(format!("/domains/{}/rrsets/", domain))?.as_str()
         ).map_err(DeSecError::Parser)
     }
 
-    pub fn create_apex_rrset(self, domain: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
-        self.create_rrset(domain, None, rrset_type, records, ttl)
-    }
-
-    pub fn create_subname_rrset(self, domain: String, subname: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
-        self.create_rrset(domain, Some(subname), rrset_type, records, ttl)
-    }
-
-    fn create_rrset(self, domain: String, subname: Option<String>, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
+    pub fn create_rrset(&self, domain: String, subname: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
         let rrset = ResourceRecordSet {
             created: None,
             domain: Some(domain.clone()),
-            subname,
+            subname: Some(subname),
             name: None,
             rrset_type: Some(rrset_type),
             records: Some(records),
@@ -102,28 +88,20 @@ impl DeSecClient {
         ).map_err(DeSecError::Parser)
     }
 
-    pub fn update_apex_rrset(self, domain: String, rrset_type: String, patch: ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
-        self.update_rrset(domain, None, rrset_type, patch)
-    }
-
-    pub fn update_subname_rrset(self, domain: String, subname: String, rrset_type: String, patch: ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
-        self.update_rrset(domain, Some(subname), rrset_type, patch)
-    }
-
-    fn update_rrset(self, domain: String, subname: Option<String>, rrset_type: String, patch: ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
+    pub fn update_rrset(&self, domain: String, subname: String, rrset_type: String, patch: ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
         serde_json::from_str(
             self.patch(
                 format!(
                     "/domains/{}/rrsets/{}/{}/"
-                    , domain, subname.clone().unwrap_or("@".to_string()), rrset_type),
+                    , domain, subname, rrset_type),
                 serde_json::to_string(&patch).map_err(DeSecError::Parser)?.as_str()
             )?.as_str()
         ).map_err(DeSecError::Parser)
     }
 
-    fn get(self, endpoint: String) -> Result<String, DeSecError> {
+    fn get(&self, endpoint: String) -> Result<String, DeSecError> {
         match ureq::get(format!("{}{}", self.api_url, endpoint).as_str())
-        .set("Authorization", format!("Token {}", self.token.unwrap()).as_str())
+        .set("Authorization", format!("Token {}", &self.token).as_str())
         .call() {
             Ok(response) => {
                 // If the response is larger than 10 megabytes, this will return an error.
@@ -139,9 +117,9 @@ impl DeSecClient {
         }
     }
 
-    fn post(self, endpoint: String, body: &str) -> Result<String, DeSecError> {
+    fn post(&self, endpoint: String, body: &str) -> Result<String, DeSecError> {
         match ureq::post(format!("{}{}", self.api_url, endpoint).as_str())
-        .set("Authorization", format!("Token {}", self.token.unwrap()).as_str())
+        .set("Authorization", format!("Token {}", &self.token).as_str())
         .set("Content-Type", "application/json")
         .send_string(body) {
             Ok(response) => {
@@ -151,7 +129,7 @@ impl DeSecClient {
             },
             Err(ureq::Error::Status(code, response)) => {
                 let status_text = response.status_text().to_string();
-                let body = response.into_string().unwrap_or("Response contains no body".to_string());
+                let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
                 Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
             },
             Err(ureq::Error::Transport(transport)) => {
@@ -160,9 +138,9 @@ impl DeSecClient {
         }
     }
 
-    fn patch(self, endpoint: String, body: &str) -> Result<String, DeSecError> {
+    fn patch(&self, endpoint: String, body: &str) -> Result<String, DeSecError> {
         match ureq::patch(format!("{}{}", self.api_url, endpoint).as_str())
-        .set("Authorization", format!("Token {}", self.token.unwrap()).as_str())
+        .set("Authorization", format!("Token {}", &self.token).as_str())
         .set("Content-Type", "application/json")
         .send_string(body) {
             Ok(response) => {
@@ -172,7 +150,7 @@ impl DeSecClient {
             },
             Err(ureq::Error::Status(code, response)) => {
                 let status_text = response.status_text().to_string();
-                let body = response.into_string().unwrap_or("Response contains no body".to_string());
+                let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
                 Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
             },
             Err(ureq::Error::Transport(transport)) => {
@@ -204,12 +182,6 @@ mod tests {
                 None
             }
         }
-    }
-
-    #[test]
-    fn test_default() {
-        let client = DeSecClient::default();
-        assert_eq!(client.api_url, API_URL);
     }
 
     #[test]
