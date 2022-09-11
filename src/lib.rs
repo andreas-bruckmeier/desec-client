@@ -110,7 +110,7 @@ impl DeSecClient {
         self.update_rrset(domain, Some(subname), rrset_type, patch)
     }
 
-    pub fn update_rrset(self, domain: String, subname: Option<String>, rrset_type: String, patch: ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
+    fn update_rrset(self, domain: String, subname: Option<String>, rrset_type: String, patch: ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
         serde_json::from_str(
             self.patch(
                 format!(
