@@ -52,6 +52,27 @@ pub struct DeSecClient {
     pub token: String
 }
 
+// Used by all request methods (get, post, patch, delete) in order
+// to evaluate the result of the request on convert types in case of errors
+fn eval_ureq_result(result: Result<ureq::Response, ureq::Error>) -> Result<String, DeSecError> {
+
+    match result {
+        Ok(response) => {
+            // If the response is larger than 10 megabytes, this will return an error.
+            // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
+            Ok(response.into_string().unwrap())
+        },
+        Err(ureq::Error::Status(code, response)) => {
+            let status_text = response.status_text().to_string();
+            let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
+            Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
+        },
+        Err(ureq::Error::Transport(transport)) => {
+            Err(DeSecError::Transport(transport.message().unwrap_or("Error contains to message").to_string()))
+        }
+    }
+}
+
 impl DeSecClient {
 
     pub fn new(token: String) -> Self {
@@ -112,7 +133,7 @@ impl DeSecClient {
         ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
-    pub fn delete_rrset(&self, domain: String, subname: String, rrset_type: String) -> Result<(), DeSecError> {
+    pub fn delete_rrset(&self, domain: String, subname: String, rrset_type: String) -> Result<String, DeSecError> {
         self.delete(
             format!(
                 "/domains/{}/rrsets/{}/{}/"
@@ -121,84 +142,36 @@ impl DeSecClient {
     }
 
     fn get(&self, endpoint: String) -> Result<String, DeSecError> {
-        match ureq::get(format!("{}{}", self.api_url, endpoint).as_str())
-        .set("Authorization", format!("Token {}", &self.token).as_str())
-        .call() {
-            Ok(response) => {
-                // If the response is larger than 10 megabytes, this will return an error.
-                // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
-                Ok(response.into_string().unwrap())
-            },
-            Err(ureq::Error::Status(_code, response)) => {
-                Err(DeSecError::Request(response.status_text().to_string()))
-            },
-            Err(ureq::Error::Transport(transport)) => {
-                Err(DeSecError::Transport(transport.message().unwrap_or("FOOO").to_string()))
-            }
-        }
+        eval_ureq_result(
+            ureq::get(format!("{}{}", self.api_url, endpoint).as_str())
+            .set("Authorization", format!("Token {}", &self.token).as_str())
+            .call()
+        )
     }
 
     fn post(&self, endpoint: String, body: String) -> Result<String, DeSecError> {
-        match ureq::post(format!("{}{}", self.api_url, endpoint).as_str())
-        .set("Authorization", format!("Token {}", &self.token).as_str())
-        .set("Content-Type", "application/json")
-        .send_string(body.as_str()) {
-            Ok(response) => {
-                // If the response is larger than 10 megabytes, this will return an error.
-                // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
-                Ok(response.into_string().unwrap())
-            },
-            Err(ureq::Error::Status(code, response)) => {
-                let status_text = response.status_text().to_string();
-                let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
-                Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
-            },
-            Err(ureq::Error::Transport(transport)) => {
-                Err(DeSecError::Transport(transport.message().unwrap_or("Error contains to message").to_string()))
-            }
-        }
+        eval_ureq_result(
+            ureq::post(format!("{}{}", self.api_url, endpoint).as_str())
+            .set("Authorization", format!("Token {}", &self.token).as_str())
+            .set("Content-Type", "application/json")
+            .send_string(body.as_str()) 
+        )
     }
 
     fn patch(&self, endpoint: String, body: &str) -> Result<String, DeSecError> {
-        match ureq::patch(format!("{}{}", self.api_url, endpoint).as_str())
-        .set("Authorization", format!("Token {}", &self.token).as_str())
-        .set("Content-Type", "application/json")
-        .send_string(body) {
-            Ok(response) => {
-                // If the response is larger than 10 megabytes, this will return an error.
-                // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
-                Ok(response.into_string().unwrap())
-            },
-            Err(ureq::Error::Status(code, response)) => {
-                let status_text = response.status_text().to_string();
-                let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
-                Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
-            },
-            Err(ureq::Error::Transport(transport)) => {
-                Err(DeSecError::Transport(transport.message().unwrap_or("Error contains to message").to_string()))
-            }
-        }
+        eval_ureq_result(
+            ureq::patch(format!("{}{}", self.api_url, endpoint).as_str())
+            .set("Authorization", format!("Token {}", &self.token).as_str())
+            .set("Content-Type", "application/json")
+            .send_string(body)
+        )
     }
 
-    fn delete(&self, endpoint: String) -> Result<(), DeSecError> {
-        match ureq::delete(format!("{}{}", self.api_url, endpoint).as_str())
-        .set("Authorization", format!("Token {}", &self.token).as_str())
-        .call() {
-            Ok(response) => {
-                println!("{:#?}", response);
-                Ok(())
-            },
-            Err(ureq::Error::Status(code, response)) => {
-                let status_text = response.status_text().to_string();
-                let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
-                Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
-            },
-            Err(ureq::Error::Transport(transport)) => {
-                Err(DeSecError::Transport(transport.message().unwrap_or("Error contains to message").to_string()))
-            }
-        }
+    fn delete(&self, endpoint: String) -> Result<String, DeSecError> {
+        eval_ureq_result(
+            ureq::delete(format!("{}{}", self.api_url, endpoint).as_str())
+            .set("Authorization", format!("Token {}", &self.token).as_str())
+            .call()
+        )
     }
 }
-
-#[cfg(test)]
-mod tests {}
