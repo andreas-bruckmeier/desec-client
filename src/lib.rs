@@ -3,19 +3,28 @@ use thiserror::Error;
 
 static API_URL: &str = "https://desec.io/api/v1";
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum DeSecError {
     #[error("Transport error: {0}")]
     Transport(String),
     #[error("The request failed: {0}")]
     Request(String),
     #[error("Failed parsing the response: {0}")]
-    Parser(serde_json::Error),
+    Parser(String),
     #[error("Unknown error")]
     Unknown,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct AccountInformation {
+    pub created: String,
+    pub email: String,
+    pub id: String,
+    pub limit_domains: u64,
+    pub outreach_preference: bool
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResourceRecordSet {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created: Option<String>,
@@ -36,6 +45,8 @@ pub struct ResourceRecordSet {
     pub touched: Option<String>
 }
 
+type ResourceRecordSetList = Vec<ResourceRecordSet>;
+
 pub struct DeSecClient {
     pub api_url: String,
     pub token: String
@@ -50,8 +61,10 @@ impl DeSecClient {
         }
     }
 
-    pub fn get_account_info(&self) -> Result<String, DeSecError> {
-        self.get("/auth/account/".to_string())
+    pub fn get_account_info(&self) -> Result<AccountInformation, DeSecError> {
+        serde_json::from_str(
+            self.get("/auth/account/".to_string())?.as_str()
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
     pub fn get_rrset(&self, domain: String, subname: String, rrset_type: String) -> Result<ResourceRecordSet, DeSecError> {
@@ -60,13 +73,13 @@ impl DeSecClient {
                 "/domains/{}/rrsets/{}/{}/",
                 domain, subname, rrset_type
             ))?.as_str()
-        ).map_err(DeSecError::Parser)
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
-    pub fn get_rrsets(&self, domain: String) -> Result<Vec<ResourceRecordSet>, DeSecError> {
+    pub fn get_rrsets(&self, domain: String) -> Result<ResourceRecordSetList, DeSecError> {
         serde_json::from_str(
             self.get(format!("/domains/{}/rrsets/", domain))?.as_str()
-        ).map_err(DeSecError::Parser)
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
     pub fn create_rrset(&self, domain: String, subname: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
@@ -83,9 +96,9 @@ impl DeSecClient {
         serde_json::from_str(
             self.post(
                 format!("/domains/{}/rrsets/", domain),
-                serde_json::to_string(&rrset).map_err(DeSecError::Parser)?.as_str()
+                serde_json::to_string(&rrset).map_err(|err| DeSecError::Parser(err.to_string()))?
             )?.as_str()
-        ).map_err(DeSecError::Parser)
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
     pub fn update_rrset(&self, domain: String, subname: String, rrset_type: String, patch: ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
@@ -94,9 +107,17 @@ impl DeSecClient {
                 format!(
                     "/domains/{}/rrsets/{}/{}/"
                     , domain, subname, rrset_type),
-                serde_json::to_string(&patch).map_err(DeSecError::Parser)?.as_str()
+                serde_json::to_string(&patch).map_err(|err| DeSecError::Parser(err.to_string()))?.as_str()
             )?.as_str()
-        ).map_err(DeSecError::Parser)
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    }
+
+    pub fn delete_rrset(&self, domain: String, subname: String, rrset_type: String) -> Result<(), DeSecError> {
+        self.delete(
+            format!(
+                "/domains/{}/rrsets/{}/{}/"
+                , domain, subname, rrset_type)
+        )
     }
 
     fn get(&self, endpoint: String) -> Result<String, DeSecError> {
@@ -117,11 +138,11 @@ impl DeSecClient {
         }
     }
 
-    fn post(&self, endpoint: String, body: &str) -> Result<String, DeSecError> {
+    fn post(&self, endpoint: String, body: String) -> Result<String, DeSecError> {
         match ureq::post(format!("{}{}", self.api_url, endpoint).as_str())
         .set("Authorization", format!("Token {}", &self.token).as_str())
         .set("Content-Type", "application/json")
-        .send_string(body) {
+        .send_string(body.as_str()) {
             Ok(response) => {
                 // If the response is larger than 10 megabytes, this will return an error.
                 // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
@@ -158,131 +179,26 @@ impl DeSecClient {
             }
         }
     }
+
+    fn delete(&self, endpoint: String) -> Result<(), DeSecError> {
+        match ureq::delete(format!("{}{}", self.api_url, endpoint).as_str())
+        .set("Authorization", format!("Token {}", &self.token).as_str())
+        .call() {
+            Ok(response) => {
+                println!("{:#?}", response);
+                Ok(())
+            },
+            Err(ureq::Error::Status(code, response)) => {
+                let status_text = response.status_text().to_string();
+                let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
+                Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
+            },
+            Err(ureq::Error::Transport(transport)) => {
+                Err(DeSecError::Transport(transport.message().unwrap_or("Error contains to message").to_string()))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::DeSecClient;
-    use super::ResourceRecordSet;
-    use super::API_URL;
-
-    fn apikey() -> Option<String> {
-        match::std::env::var("DESEC_APIKEY") {
-            Ok(key) => Some(key),
-            Err(_r) => {
-                None
-            }
-        }
-    }
-
-    fn domain() -> Option<String> {
-        match::std::env::var("DESEC_DOMAIN") {
-            Ok(domain) => Some(domain),
-            Err(_r) => {
-                None
-            }
-        }
-    }
-
-    #[test]
-    fn test_accont_info() {
-        match apikey() {
-            Some(key) => {
-               let client = DeSecClient::new(key.clone());
-               let account_info = client.get_account_info();
-               assert!(account_info.is_ok());
-            },
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn test_get_rrset() {
-        match apikey() {
-            Some(key) => {
-                match domain() {
-                    Some(domain) => {
-                        let client = DeSecClient::new(key.clone());
-                        let rrsets = client.get_rrset(
-                            domain,
-                            "nginx.bruckmeier".to_string(),
-                            "A".to_string());
-                        assert!(rrsets.is_ok());
-                    },
-                    _ => {}
-                }
-            },
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn test_get_rrsets() {
-        match apikey() {
-            Some(key) => {
-                match domain() {
-                    Some(domain) => {
-                        let client = DeSecClient::new(key.clone());
-                        let rrsets = client.get_rrsets(domain);
-                        assert!(rrsets.is_ok());
-                    },
-                    _ => {}
-                }
-            },
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn test_create_rrset() {
-        match apikey() {
-            Some(key) => {
-                match domain() {
-                    Some(domain) => {
-                        let client = DeSecClient::new(key.clone());
-                        let rrset = client.create_subname_rrset(
-                            domain,
-                            "mysubdomain".to_string(),
-                            "A".to_string(),
-                            vec!("8.8.8.8".to_string()),
-                            3600);
-                        assert!(rrset.is_ok());
-                    },
-                    _ => {}
-                }
-            },
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn test_patch_rrset() {
-        match apikey() {
-            Some(key) => {
-                match domain() {
-                    Some(domain) => {
-                        let client = DeSecClient::new(key.clone());
-                        let patch = ResourceRecordSet {
-                            created: None,
-                            domain: None,
-                            subname: None,
-                            name: None,
-                            rrset_type: None,
-                            records: Some(vec!("1.2.3.4".to_string())),
-                            ttl: Some(5000),
-                            touched: None
-                        };
-                        let rrset = client.update_subname_rrset(
-                            domain,
-                            "mysubdomain".to_string(),
-                            "A".to_string(),
-                            patch);
-                        assert!(rrset.is_ok());
-                    },
-                    _ => {}
-                }
-            },
-            _ => {}
-        }
-    }
-}
+mod tests {}
