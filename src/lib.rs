@@ -128,7 +128,7 @@ impl DeSecClient {
                 format!(
                     "/domains/{}/rrsets/{}/{}/"
                     , domain, subname, rrset_type),
-                serde_json::to_string(&patch).map_err(|err| DeSecError::Parser(err.to_string()))?.as_str()
+                serde_json::to_string(&patch).map_err(|err| DeSecError::Parser(err.to_string()))?
             )?.as_str()
         ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
@@ -158,12 +158,12 @@ impl DeSecClient {
         )
     }
 
-    fn patch(&self, endpoint: String, body: &str) -> Result<String, DeSecError> {
+    fn patch(&self, endpoint: String, body: String) -> Result<String, DeSecError> {
         eval_ureq_result(
             ureq::patch(format!("{}{}", self.api_url, endpoint).as_str())
             .set("Authorization", format!("Token {}", &self.token).as_str())
             .set("Content-Type", "application/json")
-            .send_string(body)
+            .send_string(body.as_str())
         )
     }
 
