@@ -45,9 +45,9 @@ fn test_rrset() {
 
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let rrset = client.get_rrset(
-            domain.clone(),
-            subname.clone(),
-            rrset_type.clone()
+            &domain,
+            &subname,
+            &rrset_type
         );
 
         assert!(rrset.is_ok());
@@ -60,10 +60,10 @@ fn test_rrset() {
         
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let rrset = client.update_rrset(
-            domain.clone(),
-            subname.clone(),
-            rrset_type.clone(),
-            rrset
+            &domain,
+            &subname,
+            &rrset_type,
+            &rrset
         );
 
         assert!(rrset.is_ok());
@@ -74,9 +74,9 @@ fn test_rrset() {
 
         std::thread::sleep(std::time::Duration::from_millis(1000));
         match client.delete_rrset(
-            domain,
-            subname,
-            rrset_type
+            &domain,
+            &subname,
+            &rrset_type
         ) {
             Ok(_) => {},
             Err(err) => {
