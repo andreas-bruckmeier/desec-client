@@ -1,4 +1,6 @@
 use desec_client::DeSecClient;
+use std::thread;
+use std::time::Duration;
 
 fn read_apikey() -> Option<String> {
     std::env::var("DESEC_API_TOKEN").ok()
@@ -43,7 +45,7 @@ fn test_rrset() {
         assert_eq!(rrset.as_ref().unwrap().domain.clone().unwrap(), domain);
         assert_eq!(rrset.unwrap().records.unwrap(), records);
 
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(1000));
         let rrset = client.get_rrset(
             &domain,
             &subname,
@@ -58,7 +60,7 @@ fn test_rrset() {
 
         rrset.ttl = Some(3650);
         
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(1000));
         let rrset = client.update_rrset(
             &domain,
             &subname,
@@ -72,7 +74,7 @@ fn test_rrset() {
         assert_eq!(rrset.domain.clone().unwrap(), domain);
         assert_eq!(rrset.ttl.clone().unwrap(), 3650);
 
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(1000));
         match client.delete_rrset(
             &domain,
             &subname,
