@@ -92,7 +92,7 @@ impl DeSecClient {
 
     pub fn get_account_info(&self) -> Result<AccountInformation, DeSecError> {
         serde_json::from_str(
-            self.get("/auth/account/".to_string().as_str())?.as_str()
+            self.get("/auth/account/")?.as_str()
         ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
