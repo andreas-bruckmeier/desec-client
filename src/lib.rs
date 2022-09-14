@@ -29,6 +29,41 @@ pub struct AccountInformation {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct Domain {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keys: Option<Vec<DNSSECKeyInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_ttl: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub touched: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zonefile: Option<String>
+}
+
+type DomainList = Vec<Domain>;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DNSSECKeyInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dnskey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds: Option<Vec<String>>,
+    #[serde(rename = "flags")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyflags: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keytype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ResourceRecordSet {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created: Option<String>,
@@ -99,19 +134,44 @@ impl DeSecClient {
         ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
-    pub fn get_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<ResourceRecordSet, DeSecError> {
+    pub fn create_domain(&self, domain: String) -> Result<Domain, DeSecError> {
+        serde_json::from_str(
+            self.post(
+                "/domains/",
+                format!("{{\"name\": \"{}\"}}", domain).as_str()
+            )?.as_str()
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    }
+
+    pub fn get_domains(&self) -> Result<DomainList, DeSecError> {
+        serde_json::from_str(
+            self.get("/domains/")?.as_str()
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    }
+
+    pub fn get_domain(&self, domain: &str) -> Result<Domain, DeSecError> {
         serde_json::from_str(
             self.get(format!(
-                "/domains/{}/rrsets/{}/{}/",
-                domain, subname, rrset_type
+                "/domains/{}/",
+                domain
             ).as_str())?.as_str()
         ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
-    pub fn get_rrsets(&self, domain: &str) -> Result<ResourceRecordSetList, DeSecError> {
-        serde_json::from_str(
-            self.get(format!("/domains/{}/rrsets/", domain).as_str())?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    pub fn delete_domain(&self, domain: &str) -> Result<String, DeSecError> {
+        self.delete(
+            format!(
+                "/domains/{}/"
+                , domain
+            ).as_str()
+        )
+    }
+
+    pub fn get_zonefile(&self, domain: &str) -> Result<String, DeSecError> {
+        self.get(format!(
+            "/domains/{}/zonefile/",
+            domain
+        ).as_str())
     }
 
     pub fn create_rrset(&self, domain: String, subname: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
@@ -128,6 +188,21 @@ impl DeSecClient {
                 format!("/domains/{}/rrsets/", domain).as_str(),
                 serde_json::to_string(&rrset).map_err(|err| DeSecError::Parser(err.to_string()))?.as_str()
             )?.as_str()
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    }
+
+    pub fn get_rrsets(&self, domain: &str) -> Result<ResourceRecordSetList, DeSecError> {
+        serde_json::from_str(
+            self.get(format!("/domains/{}/rrsets/", domain).as_str())?.as_str()
+        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    }
+
+    pub fn get_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<ResourceRecordSet, DeSecError> {
+        serde_json::from_str(
+            self.get(format!(
+                "/domains/{}/rrsets/{}/{}/",
+                domain, subname, rrset_type
+            ).as_str())?.as_str()
         ).map_err(|err| DeSecError::Parser(err.to_string()))
     }
 
