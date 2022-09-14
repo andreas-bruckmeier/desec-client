@@ -13,6 +13,8 @@ pub enum DeSecError {
     RessourceNotFound(String),
     #[error("Failed parsing the response: {0}")]
     Parser(String),
+    #[error("{0}")]
+    ResponseBodyToBig(String),
     #[error("Unknown error")]
     Unknown,
 }
@@ -61,22 +63,23 @@ fn eval_ureq_result(result: Result<ureq::Response, ureq::Error>) -> Result<Strin
 
     match result {
         Ok(response) => {
-            // If the response is larger than 10 megabytes, this will return an error.
+            // If the response is larger than 10 megabytes, into_string() will return an error.
             // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
-            Ok(response.into_string().unwrap())
+            // In our usecase the responses should never get that big.
+            Ok(response.into_string().map_err(|err| DeSecError::ResponseBodyToBig(err.to_string()))?)
         },
         Err(ureq::Error::Status(404, response)) => {
             let status_text = response.status_text().to_string();
-            let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
+            let body = response.into_string().map_err(|err| DeSecError::ResponseBodyToBig(err.to_string()))?;
             Err(DeSecError::RessourceNotFound(format!("{},{}", status_text, body)))
         },
         Err(ureq::Error::Status(code, response)) => {
             let status_text = response.status_text().to_string();
-            let body = response.into_string().unwrap_or_else(|_| "Response contains no body".to_string());
+            let body = response.into_string().map_err(|err| DeSecError::ResponseBodyToBig(err.to_string()))?;
             Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
         },
         Err(ureq::Error::Transport(transport)) => {
-            Err(DeSecError::Transport(transport.message().unwrap_or("Error contains to message").to_string()))
+            Err(DeSecError::Transport(transport.to_string()))
         }
     }
 }
