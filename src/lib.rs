@@ -4,12 +4,10 @@ use thiserror::Error;
 
 static API_URL: &str = "https://desec.io/api/v1";
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug)]
 pub enum DeSecError {
-    #[error("Transport error: {0}")]
-    Transport(String),
-    #[error("The request failed: {0}")]
-    Request(String),
+    #[error("An http error occured: {0}")]
+    Http(String, reqwest::Error),
     #[error("The requet resource does not exist: {0}")]
     RessourceNotFound(String),
     #[error("Failed parsing the response: {0}")]
@@ -20,13 +18,6 @@ pub enum DeSecError {
     ResponseBodyToBig(String),
     #[error("Unknown error")]
     Unknown,
-}
-
-// For auto-converting reqwest errors to our error type
-impl From<reqwest::Error> for DeSecError {
-    fn from(error: reqwest::Error) -> Self {
-        DeSecError::Request(error.to_string())
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -103,40 +94,6 @@ pub struct DeSecClient {
     pub token: String
 }
 
-// Used by all request methods (get, post, patch, delete) in order
-// to evaluate the result of the request on convert types in case of errors
-/*
-fn eval_ureq_result(result: Result<Response, Error>) -> Result<Response, DeSecError> {
-
-    match result {
-        Ok(response) => {
-            // If the response is larger than 10 megabytes, into_string() will return an error.
-            // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
-            // In our usecase the responses should never get that big.
-            Ok(response)
-        },
-        Err(error) => {
-            Err(DeSecError::Request(error.to_string()))
-        }
-        /*
-        Err(ureq::Error::Status(404, response)) => {
-            let status_text = response.status_text().to_string();
-            let body = response.into_string().map_err(|err| DeSecError::ResponseBodyToBig(err.to_string()))?;
-            Err(DeSecError::RessourceNotFound(format!("{},{}", status_text, body)))
-        },
-        Err(ureq::Error::Status(code, response)) => {
-            let status_text = response.status_text().to_string();
-            let body = response.into_string().map_err(|err| DeSecError::ResponseBodyToBig(err.to_string()))?;
-            Err(DeSecError::Request(format!("{},{},{}", code, status_text, body)))
-        },
-        Err(ureq::Error::Transport(transport)) => {
-            Err(DeSecError::Transport(transport.to_string()))
-        }
-        */
-    }
-}
-*/
-
 impl DeSecClient {
 
     pub fn new(token: String) -> Result<Self, DeSecError> {
@@ -156,60 +113,112 @@ impl DeSecClient {
     }
 
     pub async fn get_account_info(&self) -> Result<AccountInformation, DeSecError> {
-        self.get("/auth/account/")
-            .await?
-            .json()
-            .await
-            .map_err(DeSecError::from)
+        match self.get("/auth/account/").await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse account info: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to get account info"),
+                    error
+                ))
+            }
+        }
     }
 
     pub async fn create_domain(&self, domain: String) -> Result<Domain, DeSecError> {
-        self.post(
+        match self.post(
             "/domains/",
             format!("{{\"name\": \"{}\"}}", domain)
-        )
-        .await?
-        .json()
-        .await
-        .map_err(DeSecError::from)
+        ).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse response after creating doamin: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to create domain"),
+                    error
+                ))
+            }
+        }
     }
 
     pub async fn get_domains(&self) -> Result<DomainList, DeSecError> {
-        self.get("/domains/")
-            .await?
-            .json()
-            .await
-            .map_err(DeSecError::from)
+        match self.get("/domains/").await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse domain records: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to get domains"),
+                    error
+                ))
+            }
+        }
     }
 
     pub async fn get_domain(&self, domain: &str) -> Result<Domain, DeSecError> {
-        self.get(format!("/domains/{}/", domain).as_str())
-            .await?
-            .json()
-            .await
-            .map_err(DeSecError::from)
+        match self.get(format!("/domains/{}/", domain).as_str()).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse domain record: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to get domain"),
+                    error
+                ))
+            }
+        }
     }
 
     pub async fn delete_domain(&self, domain: &str) -> Result<String, DeSecError> {
-        self.delete(format!("/domains/{}/", domain).as_str())
-            .await?
-            .text()
-            .await
-            .map_err(DeSecError::from)
+        match self.delete(format!("/domains/{}/", domain).as_str()).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse response after deleting domain: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to delete domain"),
+                    error
+                ))
+            }
+        }
     }
 
     pub async fn get_zonefile(&self, domain: &str) -> Result<String, DeSecError> {
-        self.get(format!(
+        match self.get(format!(
             "/domains/{}/zonefile/",
             domain
-        ).as_str())
-        .await?
-        .text()
-        .await
-        .map_err(DeSecError::from)
+        ).as_str()).await {
+            Ok(response) => {
+                response.text().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to read zonefile response: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to get zonefile"),
+                    error
+                ))
+            }
+        }
     }
 
-    pub async fn create_rrset(&self, domain: String, subname: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
+    pub async fn create_rrset(
+        &self, domain: String, subname: String,
+        rrset_type: String, records: Vec<String>, ttl: u64)
+    -> Result<ResourceRecordSet, DeSecError> {
+
         let rrset = ResourceRecordSet {
             domain: Some(domain.clone()),
             subname: Some(subname),
@@ -218,59 +227,106 @@ impl DeSecClient {
             ttl: Some(ttl),
             ..ResourceRecordSet::default()
         };
-        self.post(
+        match self.post(
             format!("/domains/{}/rrsets/", domain).as_str(),
             serde_json::to_string(&rrset).map_err(|err| DeSecError::Parser(err.to_string()))?
-        )
-        .await?
-        .json()
-        .await
-        .map_err(DeSecError::from)
+        ).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse response after creating rrset: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to create rrset"),
+                    error
+                ))
+            }
+        }
     }
 
     pub async fn get_rrsets(&self, domain: &str) -> Result<ResourceRecordSetList, DeSecError> {
-        self.get(format!("/domains/{}/rrsets/", domain).as_str())
-        .await?
-        .json()
-        .await
-        .map_err(DeSecError::from)
+        match self.get(format!("/domains/{}/rrsets/", domain).as_str()).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse rrsets: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to get rrsets"),
+                    error
+                ))
+            }
+        }
     }
 
-    pub async fn get_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<ResourceRecordSet, DeSecError> {
-        self.get(format!(
+    pub async fn get_rrset(&self, domain: &str, subname: &str, rrset_type: &str)
+    -> Result<ResourceRecordSet, DeSecError> {
+
+        match self.get(format!(
             "/domains/{}/rrsets/{}/{}/",
             domain, subname, rrset_type
-        ).as_str())
-        .await?
-        .json()
-        .await
-        .map_err(DeSecError::from)
+        ).as_str()).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse rrset: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to get rrset"),
+                    error
+                ))
+            }
+        }
     }
 
-    pub async fn update_rrset(&self, domain: &str, subname: &str, rrset_type: &str, patch: &ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
-        self.patch(
+    pub async fn update_rrset(&self, domain: &str, subname: &str,
+        rrset_type: &str, patch: &ResourceRecordSet)
+    -> Result<ResourceRecordSet, DeSecError> {
+
+        match self.patch(
             format!(
                 "/domains/{}/rrsets/{}/{}/"
                 , domain, subname, rrset_type).as_str(),
             serde_json::to_string(patch).map_err(|err| DeSecError::Parser(err.to_string()))?
-        )
-        .await?
-        .json()
-        .await
-        .map_err(DeSecError::from)
+        ).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse response after updating rrset: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to update rrset"),
+                    error
+                ))
+            }
+        }
     }
 
-    pub async fn delete_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<String, DeSecError> {
-        self.delete(
+    pub async fn delete_rrset(&self, domain: &str, subname: &str, rrset_type: &str)
+    -> Result<String, DeSecError> {
+
+        match self.delete(
             format!(
                 "/domains/{}/rrsets/{}/{}/"
                 , domain, subname, rrset_type
             ).as_str()
-        )
-        .await?
-        .text()
-        .await
-        .map_err(DeSecError::from)
+        ).await {
+            Ok(response) => {
+                response.json().await.map_err(|error| DeSecError::Parser(
+                    format!("Failed to parse response after deleting rrset: {}", error)
+                ))
+            },
+            Err(error) => {
+                Err(DeSecError::Http(
+                    String::from("Failed to delete rrset"),
+                    error
+                ))
+            }
+        }
     }
 
     async fn get(&self, endpoint: &str) -> Result<Response, Error> {
