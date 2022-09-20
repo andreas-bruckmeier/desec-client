@@ -1,3 +1,4 @@
+use reqwest::{ header, Response, Error };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -13,10 +14,19 @@ pub enum DeSecError {
     RessourceNotFound(String),
     #[error("Failed parsing the response: {0}")]
     Parser(String),
+    #[error("Failed to create HTTP client: {0}")]
+    ClientBuilder(String),
     #[error("{0}")]
     ResponseBodyToBig(String),
     #[error("Unknown error")]
     Unknown,
+}
+
+// For auto-converting reqwest errors to our error type
+impl From<reqwest::Error> for DeSecError {
+    fn from(error: reqwest::Error) -> Self {
+        DeSecError::Request(error.to_string())
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -88,21 +98,27 @@ type ResourceRecordSetList = Vec<ResourceRecordSet>;
 
 #[derive(Debug, Clone)]
 pub struct DeSecClient {
+    client: reqwest::Client,
     pub api_url: String,
     pub token: String
 }
 
 // Used by all request methods (get, post, patch, delete) in order
 // to evaluate the result of the request on convert types in case of errors
-fn eval_ureq_result(result: Result<ureq::Response, ureq::Error>) -> Result<String, DeSecError> {
+/*
+fn eval_ureq_result(result: Result<Response, Error>) -> Result<Response, DeSecError> {
 
     match result {
         Ok(response) => {
             // If the response is larger than 10 megabytes, into_string() will return an error.
             // https://docs.rs/ureq/2.5.0/ureq/struct.Response.html#method.into_string
             // In our usecase the responses should never get that big.
-            Ok(response.into_string().map_err(|err| DeSecError::ResponseBodyToBig(err.to_string()))?)
+            Ok(response)
         },
+        Err(error) => {
+            Err(DeSecError::Request(error.to_string()))
+        }
+        /*
         Err(ureq::Error::Status(404, response)) => {
             let status_text = response.status_text().to_string();
             let body = response.into_string().map_err(|err| DeSecError::ResponseBodyToBig(err.to_string()))?;
@@ -116,65 +132,84 @@ fn eval_ureq_result(result: Result<ureq::Response, ureq::Error>) -> Result<Strin
         Err(ureq::Error::Transport(transport)) => {
             Err(DeSecError::Transport(transport.to_string()))
         }
+        */
     }
 }
+*/
 
 impl DeSecClient {
 
-    pub fn new(token: String) -> Self {
-        DeSecClient {
-            api_url: API_URL.into(),
-            token
-        }
+    pub fn new(token: String) -> Result<Self, DeSecError> {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            header::HeaderValue::from_str(
+                format!("Token {}", token.as_str()).as_str()
+            ).unwrap()
+        );
+        let client = reqwest::ClientBuilder::new()
+            .user_agent("rust-desec-client")
+            .default_headers(headers)
+            .build()
+            .map_err(|error| DeSecError::ClientBuilder(error.to_string()))?;
+        Ok(DeSecClient { client, api_url: API_URL.into(), token })
     }
 
-    pub fn get_account_info(&self) -> Result<AccountInformation, DeSecError> {
-        serde_json::from_str(
-            self.get("/auth/account/")?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    pub async fn get_account_info(&self) -> Result<AccountInformation, DeSecError> {
+        self.get("/auth/account/")
+            .await?
+            .json()
+            .await
+            .map_err(DeSecError::from)
     }
 
-    pub fn create_domain(&self, domain: String) -> Result<Domain, DeSecError> {
-        serde_json::from_str(
-            self.post(
-                "/domains/",
-                format!("{{\"name\": \"{}\"}}", domain).as_str()
-            )?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
-    }
-
-    pub fn get_domains(&self) -> Result<DomainList, DeSecError> {
-        serde_json::from_str(
-            self.get("/domains/")?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
-    }
-
-    pub fn get_domain(&self, domain: &str) -> Result<Domain, DeSecError> {
-        serde_json::from_str(
-            self.get(format!(
-                "/domains/{}/",
-                domain
-            ).as_str())?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
-    }
-
-    pub fn delete_domain(&self, domain: &str) -> Result<String, DeSecError> {
-        self.delete(
-            format!(
-                "/domains/{}/"
-                , domain
-            ).as_str()
+    pub async fn create_domain(&self, domain: String) -> Result<Domain, DeSecError> {
+        self.post(
+            "/domains/",
+            format!("{{\"name\": \"{}\"}}", domain)
         )
+        .await?
+        .json()
+        .await
+        .map_err(DeSecError::from)
     }
 
-    pub fn get_zonefile(&self, domain: &str) -> Result<String, DeSecError> {
+    pub async fn get_domains(&self) -> Result<DomainList, DeSecError> {
+        self.get("/domains/")
+            .await?
+            .json()
+            .await
+            .map_err(DeSecError::from)
+    }
+
+    pub async fn get_domain(&self, domain: &str) -> Result<Domain, DeSecError> {
+        self.get(format!("/domains/{}/", domain).as_str())
+            .await?
+            .json()
+            .await
+            .map_err(DeSecError::from)
+    }
+
+    pub async fn delete_domain(&self, domain: &str) -> Result<String, DeSecError> {
+        self.delete(format!("/domains/{}/", domain).as_str())
+            .await?
+            .text()
+            .await
+            .map_err(DeSecError::from)
+    }
+
+    pub async fn get_zonefile(&self, domain: &str) -> Result<String, DeSecError> {
         self.get(format!(
             "/domains/{}/zonefile/",
             domain
         ).as_str())
+        .await?
+        .text()
+        .await
+        .map_err(DeSecError::from)
     }
 
-    pub fn create_rrset(&self, domain: String, subname: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
+    pub async fn create_rrset(&self, domain: String, subname: String, rrset_type: String, records: Vec<String>, ttl: u64) -> Result<ResourceRecordSet, DeSecError> {
         let rrset = ResourceRecordSet {
             domain: Some(domain.clone()),
             subname: Some(subname),
@@ -183,80 +218,86 @@ impl DeSecClient {
             ttl: Some(ttl),
             ..ResourceRecordSet::default()
         };
-        serde_json::from_str(
-            self.post(
-                format!("/domains/{}/rrsets/", domain).as_str(),
-                serde_json::to_string(&rrset).map_err(|err| DeSecError::Parser(err.to_string()))?.as_str()
-            )?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
+        self.post(
+            format!("/domains/{}/rrsets/", domain).as_str(),
+            serde_json::to_string(&rrset).map_err(|err| DeSecError::Parser(err.to_string()))?
+        )
+        .await?
+        .json()
+        .await
+        .map_err(DeSecError::from)
     }
 
-    pub fn get_rrsets(&self, domain: &str) -> Result<ResourceRecordSetList, DeSecError> {
-        serde_json::from_str(
-            self.get(format!("/domains/{}/rrsets/", domain).as_str())?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    pub async fn get_rrsets(&self, domain: &str) -> Result<ResourceRecordSetList, DeSecError> {
+        self.get(format!("/domains/{}/rrsets/", domain).as_str())
+        .await?
+        .json()
+        .await
+        .map_err(DeSecError::from)
     }
 
-    pub fn get_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<ResourceRecordSet, DeSecError> {
-        serde_json::from_str(
-            self.get(format!(
-                "/domains/{}/rrsets/{}/{}/",
-                domain, subname, rrset_type
-            ).as_str())?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    pub async fn get_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<ResourceRecordSet, DeSecError> {
+        self.get(format!(
+            "/domains/{}/rrsets/{}/{}/",
+            domain, subname, rrset_type
+        ).as_str())
+        .await?
+        .json()
+        .await
+        .map_err(DeSecError::from)
     }
 
-    pub fn update_rrset(&self, domain: &str, subname: &str, rrset_type: &str, patch: &ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
-        serde_json::from_str(
-            self.patch(
-                format!(
-                    "/domains/{}/rrsets/{}/{}/"
-                    , domain, subname, rrset_type).as_str(),
-                serde_json::to_string(patch).map_err(|err| DeSecError::Parser(err.to_string()))?.as_str()
-            )?.as_str()
-        ).map_err(|err| DeSecError::Parser(err.to_string()))
+    pub async fn update_rrset(&self, domain: &str, subname: &str, rrset_type: &str, patch: &ResourceRecordSet) -> Result<ResourceRecordSet, DeSecError> {
+        self.patch(
+            format!(
+                "/domains/{}/rrsets/{}/{}/"
+                , domain, subname, rrset_type).as_str(),
+            serde_json::to_string(patch).map_err(|err| DeSecError::Parser(err.to_string()))?
+        )
+        .await?
+        .json()
+        .await
+        .map_err(DeSecError::from)
     }
 
-    pub fn delete_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<String, DeSecError> {
+    pub async fn delete_rrset(&self, domain: &str, subname: &str, rrset_type: &str) -> Result<String, DeSecError> {
         self.delete(
             format!(
                 "/domains/{}/rrsets/{}/{}/"
                 , domain, subname, rrset_type
             ).as_str()
         )
+        .await?
+        .text()
+        .await
+        .map_err(DeSecError::from)
     }
 
-    fn get(&self, endpoint: &str) -> Result<String, DeSecError> {
-        eval_ureq_result(
-            ureq::get(format!("{}{}", self.api_url, endpoint).as_str())
-            .set("Authorization", format!("Token {}", &self.token).as_str())
-            .call()
-        )
+    async fn get(&self, endpoint: &str) -> Result<Response, Error> {
+        self.client.get(format!("{}{}", self.api_url, endpoint))
+            .send()
+            .await
     }
 
-    fn post(&self, endpoint: &str, body: &str) -> Result<String, DeSecError> {
-        eval_ureq_result(
-            ureq::post(format!("{}{}", self.api_url, endpoint).as_str())
-            .set("Authorization", format!("Token {}", &self.token).as_str())
-            .set("Content-Type", "application/json")
-            .send_string(body)
-        )
+    async fn post(&self, endpoint: &str, body: String) -> Result<Response, Error> {
+        self.client.post(format!("{}{}", self.api_url, endpoint).as_str())
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
     }
 
-    fn patch(&self, endpoint: &str, body: &str) -> Result<String, DeSecError> {
-        eval_ureq_result(
-            ureq::patch(format!("{}{}", self.api_url, endpoint).as_str())
-            .set("Authorization", format!("Token {}", &self.token).as_str())
-            .set("Content-Type", "application/json")
-            .send_string(body)
-        )
+    async fn patch(&self, endpoint: &str, body: String) -> Result<Response, Error> {
+        self.client.patch(format!("{}{}", self.api_url, endpoint).as_str())
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await
     }
 
-    fn delete(&self, endpoint: &str) -> Result<String, DeSecError> {
-        eval_ureq_result(
-            ureq::delete(format!("{}{}", self.api_url, endpoint).as_str())
-            .set("Authorization", format!("Token {}", &self.token).as_str())
-            .call()
-        )
+    async fn delete(&self, endpoint: &str) -> Result<Response, Error> {
+        self.client.delete(format!("{}{}", self.api_url, endpoint).as_str())
+            .send()
+            .await
     }
 }
