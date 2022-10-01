@@ -313,6 +313,9 @@ impl DeSecClient {
     pub async fn get_rrset(&self, domain: &str, subname: &str, rrset_type: &str)
     -> Result<ResourceRecordSet, DeSecError> {
 
+        // https://desec.readthedocs.io/en/latest/dns/rrsets.html#accessing-the-zone-apex
+        let subname = if subname.is_empty() { "@" } else { subname };
+
         match self.get(format!(
             "/domains/{}/rrsets/{}/{}/",
             domain, subname, rrset_type
