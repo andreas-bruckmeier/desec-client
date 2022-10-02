@@ -1,4 +1,4 @@
-use reqwest::{header, Error, Response};
+use reqwest::{header, Error, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -7,10 +7,14 @@ static API_URL: &str = "https://desec.io/api/v1";
 #[derive(Error, Debug)]
 pub enum DeSecError {
     #[error("An http error occured: {0}")]
-    Http(String, reqwest::Error),
-    #[error("{0}")]
-    NotFound(String),
+    Http(#[from] Error),
+    #[error("Bulk request rejected: {0}")]
+    HttpBulk(serde_json::Value),
+    #[error("An unknown http status code has been received")]
+    HttpUnexpectedStatus(Response),
     #[error("The requet resource does not exist: {0}")]
+    NotFound(String),
+    #[error("Failed to parse the the response JSON: {0}")]
     Parser(String),
     #[error("Failed to create HTTP client: {0}")]
     ClientBuilder(String),
@@ -43,7 +47,7 @@ pub struct Domain {
     pub zonefile: Option<String>,
 }
 
-type DomainList = Vec<Domain>;
+pub type DomainList = Vec<Domain>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct DNSSECKeyInfo {
@@ -81,7 +85,7 @@ pub struct ResourceRecordSet {
     pub touched: Option<String>,
 }
 
-type ResourceRecordSetList = Vec<ResourceRecordSet>;
+pub type ResourceRecordSetList = Vec<ResourceRecordSet>;
 
 #[derive(Debug, Clone)]
 pub struct DeSecClient {
@@ -111,19 +115,17 @@ impl DeSecClient {
 
     pub async fn get_account_info(&self) -> Result<AccountInformation, DeSecError> {
         match self.get("/auth/account/").await {
-            Ok(response) if response.status().as_u16() == 200 => {
-                response.json().await.map_err(|error| {
-                    DeSecError::Parser(format!("Failed to parse account info: {}", error))
-                })
+            Ok(response) if response.status() == StatusCode::OK => response
+                .json()
+                .await
+                .map_err(|error| DeSecError::Parser(error.to_string())),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to get account information"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to get account info"),
-                error,
-            )),
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
@@ -132,79 +134,65 @@ impl DeSecClient {
             .post("/domains/", format!("{{\"name\": \"{}\"}}", domain))
             .await
         {
-            Ok(response) if response.status().as_u16() == 201 => {
-                response.json().await.map_err(|error| {
-                    DeSecError::Parser(format!(
-                        "Failed to parse response after creating doamin: {}",
-                        error
-                    ))
-                })
+            Ok(response) if response.status() == StatusCode::CREATED => response
+                .json()
+                .await
+                .map_err(|error| DeSecError::Parser(error.to_string())),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to create domain"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to create domain"),
-                error,
-            )),
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
     pub async fn get_domains(&self) -> Result<DomainList, DeSecError> {
         match self.get("/domains/").await {
-            Ok(response) if response.status().as_u16() == 200 => {
-                response.json().await.map_err(|error| {
-                    DeSecError::Parser(format!("Failed to parse domain records: {}", error))
-                })
+            Ok(response) if response.status() == StatusCode::OK => response
+                .json()
+                .await
+                .map_err(|error| DeSecError::Parser(error.to_string())),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to get domains"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to get domains"),
-                error,
-            )),
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
     pub async fn get_domain(&self, domain: &str) -> Result<Domain, DeSecError> {
         match self.get(format!("/domains/{}/", domain).as_str()).await {
-            Ok(response) if response.status().as_u16() == 200 => {
-                response.json().await.map_err(|error| {
-                    DeSecError::Parser(format!("Failed to parse domain record: {}", error))
-                })
+            Ok(response) if response.status() == StatusCode::OK => response
+                .json()
+                .await
+                .map_err(|error| DeSecError::Parser(error.to_string())),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to get domain"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to get domain"),
-                error,
-            )),
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
     pub async fn delete_domain(&self, domain: &str) -> Result<String, DeSecError> {
         match self.delete(format!("/domains/{}/", domain).as_str()).await {
-            Ok(response) if response.status().as_u16() == 204 => {
-                response.text().await.map_err(|error| {
-                    DeSecError::Parser(format!(
-                        "Failed to parse response after deleting domain: {}",
-                        error
-                    ))
-                })
+            Ok(response) if response.status() == StatusCode::NO_CONTENT => response
+                .text()
+                .await
+                .map_err(|error| DeSecError::Parser(error.to_string())),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to delete domain"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to delete domain"),
-                error,
-            )),
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
@@ -213,19 +201,17 @@ impl DeSecClient {
             .get(format!("/domains/{}/zonefile/", domain).as_str())
             .await
         {
-            Ok(response) if response.status().as_u16() == 200 => {
-                response.text().await.map_err(|error| {
-                    DeSecError::Parser(format!("Failed to read zonefile response: {}", error))
-                })
+            Ok(response) if response.status() == StatusCode::OK => response
+                .text()
+                .await
+                .map_err(|error| DeSecError::Parser(error.to_string())),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to get zonefile"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to get zonefile"),
-                error,
-            )),
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
@@ -252,7 +238,7 @@ impl DeSecClient {
             )
             .await
         {
-            Ok(response) if response.status().as_u16() == 201 => {
+            Ok(response) if response.status() == StatusCode::CREATED => {
                 response.json().await.map_err(|error| {
                     DeSecError::Parser(format!(
                         "Failed to parse response after creating rrset: {}",
@@ -260,14 +246,40 @@ impl DeSecClient {
                     ))
                 })
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to create rrset"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to create rrset"),
-                error,
-            )),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
+            }
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
+        }
+    }
+
+    pub async fn create_rrset_bulk(
+        &self,
+        domain: String,
+        rrsets: ResourceRecordSetList,
+    ) -> Result<(), DeSecError> {
+        match self
+            .post(
+                format!("/domains/{}/rrsets/", domain).as_str(),
+                serde_json::to_string(&rrsets)
+                    .map_err(|err| DeSecError::Parser(err.to_string()))?,
+            )
+            .await
+        {
+            Ok(response) if response.status() == StatusCode::CREATED => Ok(()),
+            Ok(response) if response.status() == StatusCode::BAD_REQUEST => {
+                Err(DeSecError::HttpBulk(response.json().await?))
+            }
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
+            }
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
@@ -276,21 +288,20 @@ impl DeSecClient {
             .get(format!("/domains/{}/rrsets/", domain).as_str())
             .await
         {
-            Ok(response) if response.status().as_u16() == 200 => response
+            Ok(response) if response.status() == StatusCode::OK => response
                 .json()
                 .await
                 .map_err(|error| DeSecError::Parser(format!("Failed to parse rrsets: {}", error))),
-            Ok(response) if response.status().as_u16() == 404 => Err(DeSecError::NotFound(
-                format!("rrsets for domain {} not found", domain),
-            )),
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to get rrsets"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to get rrsets"),
-                error,
-            )),
+            Ok(response) if response.status() == StatusCode::NOT_FOUND => Err(
+                DeSecError::NotFound(format!("rrsets for domain {} not found", domain)),
+            ),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
+            }
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
@@ -304,18 +315,23 @@ impl DeSecClient {
             .get(format!("/domains/{}/rrsets/{}/{}/", domain, subname, rrset_type).as_str())
             .await
         {
-            Ok(response) if response.status().as_u16() == 200 => response
+            Ok(response) if response.status() == StatusCode::OK => response
                 .json()
                 .await
                 .map_err(|error| DeSecError::Parser(format!("Failed to parse rrset: {}", error))),
-            Ok(response) if response.status().as_u16() == 404 => Err(DeSecError::NotFound(
-                format!("rrset {}.{} ({}) not found", subname, domain, rrset_type),
-            )),
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to get rrset"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(String::from("Failed to get rrset"), error)),
+            Ok(response) if response.status() == StatusCode::NOT_FOUND => {
+                Err(DeSecError::NotFound(format!(
+                    "rrset {}.{} ({}) not found",
+                    subname, domain, rrset_type
+                )))
+            }
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
+            }
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
@@ -333,7 +349,7 @@ impl DeSecClient {
             )
             .await
         {
-            Ok(response) if response.status().as_u16() == 200 => {
+            Ok(response) if response.status() == StatusCode::OK => {
                 response.json().await.map_err(|error| {
                     DeSecError::Parser(format!(
                         "Failed to parse response after updating rrset: {}",
@@ -341,14 +357,13 @@ impl DeSecClient {
                     ))
                 })
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to update rrset"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to update rrset"),
-                error,
-            )),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
+            }
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
@@ -362,7 +377,7 @@ impl DeSecClient {
             .delete(format!("/domains/{}/rrsets/{}/{}/", domain, subname, rrset_type).as_str())
             .await
         {
-            Ok(response) if response.status().as_u16() == 204 => {
+            Ok(response) if response.status() == StatusCode::NO_CONTENT => {
                 response.text().await.map_err(|error| {
                     DeSecError::Parser(format!(
                         "Failed to parse response after deleting rrset: {}",
@@ -370,14 +385,13 @@ impl DeSecClient {
                     ))
                 })
             }
-            Ok(response) => Err(DeSecError::Http(
-                String::from("Failed to delete rrset"),
-                response.error_for_status().err().unwrap(),
-            )),
-            Err(error) => Err(DeSecError::Http(
-                String::from("Failed to delete rrset"),
-                error,
-            )),
+            Ok(response)
+                if response.status().is_client_error() || response.status().is_server_error() =>
+            {
+                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
+            }
+            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
+            Err(error) => Err(DeSecError::Http(error)),
         }
     }
 
