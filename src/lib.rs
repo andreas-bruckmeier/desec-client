@@ -1,32 +1,28 @@
 use reqwest::{header, Error, Response, StatusCode};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 static API_URL: &str = "https://desec.io/api/v1";
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum DeSecError {
+    #[error("Operation cannot be performed: {0}")]
+    BadRequest(String),
     #[error("An http error occured: {0}")]
     Http(#[from] Error),
     #[error("Bulk request rejected: {0}")]
     HttpBulk(serde_json::Value),
     #[error("An unknown http status code has been received")]
     HttpUnexpectedStatus(Response),
-    #[error("The requet resource does not exist: {0}")]
-    NotFound(String),
-    #[error("Failed to parse the the response JSON: {0}")]
+    #[error("The requet resource does not exist")]
+    NotFound,
+    #[error("You reached your deSEC domain limit")]
+    DomainLimit,
+    #[error("Failed to parse the response: {0}")]
     Parser(String),
     #[error("Failed to create HTTP client: {0}")]
     ClientBuilder(String),
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct AccountInformation {
-    pub created: String,
-    pub email: String,
-    pub id: String,
-    pub limit_domains: u64,
-    pub outreach_preference: bool,
+    #[error("Failed to create HTTP client: {0}")]
+    Generic(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -87,11 +83,9 @@ pub struct ResourceRecordSet {
 
 pub type ResourceRecordSetList = Vec<ResourceRecordSet>;
 
-#[derive(Debug, Clone)]
 pub struct DeSecClient {
     client: reqwest::Client,
-    pub api_url: String,
-    pub token: String,
+    api_url: String,
 }
 
 impl DeSecClient {
@@ -109,90 +103,52 @@ impl DeSecClient {
         Ok(DeSecClient {
             client,
             api_url: API_URL.into(),
-            token,
         })
     }
 
-    pub async fn get_account_info(&self) -> Result<AccountInformation, DeSecError> {
-        match self.get("/auth/account/").await {
-            Ok(response) if response.status() == StatusCode::OK => response
-                .json()
-                .await
-                .map_err(|error| DeSecError::Parser(error.to_string())),
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
-        }
-    }
-
-    pub async fn create_domain(&self, domain: String) -> Result<Domain, DeSecError> {
+    pub async fn create_domain(&self, domain: &str) -> Result<Domain, DeSecError> {
         match self
             .post("/domains/", format!("{{\"name\": \"{}\"}}", domain))
             .await
         {
-            Ok(response) if response.status() == StatusCode::CREATED => response
-                .json()
-                .await
-                .map_err(|error| DeSecError::Parser(error.to_string())),
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::CREATED => response.json().await.map_err(|error| error.into()),
+                StatusCode::BAD_REQUEST => Err(DeSecError::BadRequest(response.text().await?)),
+                StatusCode::FORBIDDEN => Err(DeSecError::DomainLimit),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
     pub async fn get_domains(&self) -> Result<DomainList, DeSecError> {
         match self.get("/domains/").await {
-            Ok(response) if response.status() == StatusCode::OK => response
-                .json()
-                .await
-                .map_err(|error| DeSecError::Parser(error.to_string())),
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::CREATED => response.json().await.map_err(|error| error.into()),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
     pub async fn get_domain(&self, domain: &str) -> Result<Domain, DeSecError> {
         match self.get(format!("/domains/{}/", domain).as_str()).await {
-            Ok(response) if response.status() == StatusCode::OK => response
-                .json()
-                .await
-                .map_err(|error| DeSecError::Parser(error.to_string())),
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::CREATED => response.json().await.map_err(|error| error.into()),
+                StatusCode::NOT_FOUND => Err(DeSecError::NotFound),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
-    pub async fn delete_domain(&self, domain: &str) -> Result<String, DeSecError> {
+    pub async fn delete_domain(&self, domain: &str) -> Result<(), DeSecError> {
         match self.delete(format!("/domains/{}/", domain).as_str()).await {
-            Ok(response) if response.status() == StatusCode::NO_CONTENT => response
-                .text()
-                .await
-                .map_err(|error| DeSecError::Parser(error.to_string())),
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::NO_CONTENT => Ok(()),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -201,17 +157,12 @@ impl DeSecClient {
             .get(format!("/domains/{}/zonefile/", domain).as_str())
             .await
         {
-            Ok(response) if response.status() == StatusCode::OK => response
-                .text()
-                .await
-                .map_err(|error| DeSecError::Parser(error.to_string())),
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::OK => response.text().await.map_err(|error| error.into()),
+                StatusCode::NOT_FOUND => Err(DeSecError::NotFound),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -238,21 +189,12 @@ impl DeSecClient {
             )
             .await
         {
-            Ok(response) if response.status() == StatusCode::CREATED => {
-                response.json().await.map_err(|error| {
-                    DeSecError::Parser(format!(
-                        "Failed to parse response after creating rrset: {}",
-                        error
-                    ))
-                })
-            }
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::CREATED => response.json().await.map_err(|error| error.into()),
+                StatusCode::BAD_REQUEST => Err(DeSecError::BadRequest(response.text().await?)),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -269,17 +211,12 @@ impl DeSecClient {
             )
             .await
         {
-            Ok(response) if response.status() == StatusCode::CREATED => Ok(()),
-            Ok(response) if response.status() == StatusCode::BAD_REQUEST => {
-                Err(DeSecError::HttpBulk(response.json().await?))
-            }
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::CREATED => Ok(()),
+                StatusCode::BAD_REQUEST => Err(DeSecError::HttpBulk(response.json().await?)),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -288,20 +225,12 @@ impl DeSecClient {
             .get(format!("/domains/{}/rrsets/", domain).as_str())
             .await
         {
-            Ok(response) if response.status() == StatusCode::OK => response
-                .json()
-                .await
-                .map_err(|error| DeSecError::Parser(format!("Failed to parse rrsets: {}", error))),
-            Ok(response) if response.status() == StatusCode::NOT_FOUND => Err(
-                DeSecError::NotFound(format!("rrsets for domain {} not found", domain)),
-            ),
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::OK => response.json().await.map_err(|error| error.into()),
+                StatusCode::NOT_FOUND => Err(DeSecError::NotFound),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -315,23 +244,12 @@ impl DeSecClient {
             .get(format!("/domains/{}/rrsets/{}/{}/", domain, subname, rrset_type).as_str())
             .await
         {
-            Ok(response) if response.status() == StatusCode::OK => response
-                .json()
-                .await
-                .map_err(|error| DeSecError::Parser(format!("Failed to parse rrset: {}", error))),
-            Ok(response) if response.status() == StatusCode::NOT_FOUND => {
-                Err(DeSecError::NotFound(format!(
-                    "rrset {}.{} ({}) not found",
-                    subname, domain, rrset_type
-                )))
-            }
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::OK => response.json().await.map_err(|error| error.into()),
+                StatusCode::NOT_FOUND => Err(DeSecError::NotFound),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -349,21 +267,35 @@ impl DeSecClient {
             )
             .await
         {
-            Ok(response) if response.status() == StatusCode::OK => {
-                response.json().await.map_err(|error| {
-                    DeSecError::Parser(format!(
-                        "Failed to parse response after updating rrset: {}",
-                        error
-                    ))
-                })
-            }
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::OK => response.json().await.map_err(|error| error.into()),
+                StatusCode::NO_CONTENT => Ok(ResourceRecordSet::default()),
+                StatusCode::BAD_REQUEST => Err(DeSecError::HttpBulk(response.json().await?)),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub async fn update_rrset_bulk(
+        &self,
+        domain: String,
+        rrsets: ResourceRecordSetList,
+    ) -> Result<(), DeSecError> {
+        match self
+            .patch(
+                format!("/domains/{}/rrsets/", domain).as_str(),
+                serde_json::to_string(&rrsets)
+                    .map_err(|err| DeSecError::Parser(err.to_string()))?,
+            )
+            .await
+        {
+            Ok(response) => match response.status() {
+                StatusCode::CREATED => Ok(()),
+                StatusCode::BAD_REQUEST => Err(DeSecError::HttpBulk(response.json().await?)),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -372,26 +304,16 @@ impl DeSecClient {
         domain: &str,
         subname: &str,
         rrset_type: &str,
-    ) -> Result<String, DeSecError> {
+    ) -> Result<(), DeSecError> {
         match self
             .delete(format!("/domains/{}/rrsets/{}/{}/", domain, subname, rrset_type).as_str())
             .await
         {
-            Ok(response) if response.status() == StatusCode::NO_CONTENT => {
-                response.text().await.map_err(|error| {
-                    DeSecError::Parser(format!(
-                        "Failed to parse response after deleting rrset: {}",
-                        error
-                    ))
-                })
-            }
-            Ok(response)
-                if response.status().is_client_error() || response.status().is_server_error() =>
-            {
-                Err(DeSecError::Http(response.error_for_status().err().unwrap()))
-            }
-            Ok(response) => Err(DeSecError::HttpUnexpectedStatus(response)),
-            Err(error) => Err(DeSecError::Http(error)),
+            Ok(response) => match response.status() {
+                StatusCode::NO_CONTENT => Ok(()),
+                _ => Err(DeSecError::HttpUnexpectedStatus(response)),
+            },
+            Err(error) => Err(error.into()),
         }
     }
 
