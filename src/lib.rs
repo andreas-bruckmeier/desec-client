@@ -349,6 +349,9 @@ impl DeSecClient {
         rrset_type: &str, patch: &ResourceRecordSet)
     -> Result<ResourceRecordSet, DeSecError> {
 
+        // https://desec.readthedocs.io/en/latest/dns/rrsets.html#accessing-the-zone-apex
+        let subname = if subname.is_empty() { "@" } else { subname };
+
         match self.patch(
             format!(
                 "/domains/{}/rrsets/{}/{}/"
@@ -377,6 +380,9 @@ impl DeSecClient {
 
     pub async fn delete_rrset(&self, domain: &str, subname: &str, rrset_type: &str)
     -> Result<String, DeSecError> {
+
+        // https://desec.readthedocs.io/en/latest/dns/rrsets.html#accessing-the-zone-apex
+        let subname = if subname.is_empty() { "@" } else { subname };
 
         match self.delete(
             format!(
