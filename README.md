@@ -1,5 +1,8 @@
 # deSEC Client
 
+> [!NOTE]
+> This repository will no longer be maintained. See https://github.com/andreas-bruckmeier/desec_api
+
 Client library for the deSEC Free Secure DNS service focussing on retrieving and creating DNS Records
 
 ## How to use in your project
